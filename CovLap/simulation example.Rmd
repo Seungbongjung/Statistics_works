@@ -1,0 +1,487 @@
+---
+title: "Simulation Example"
+author: "Sung Bongjung"
+date: '2021 11 1 '
+output: html_document
+---
+
+```{r message=FALSE}
+library(dplyr)
+library(mvtnorm)
+library(spcov)
+```
+
+
+In this note, we provide a simulation example for our propsed method. 
+
+
+## Model 
+
+
+ The model we are considering in this note is $N(0,\Sigma)$, where $\Sigma$ is the inverse of Toeplitz matrix $\Omega=(\omega_{ij})$ ($\omega_{ij}=0.75^{|i-j|}$). We generate 12000 samples from posterior after $3000$ burn-in for our proposed method through Metropolis-Hastings algorithm. We choose the final model either by median probability model (MPM) or maximum a posterior (MAP). Our competing methods are graphical lasso and sample covariance matrix. 
+ 
+ 
+ Following code implements block coordinate descent algorithm. 
+ 
+ 
+```{r}
+bcd_covariance2=function(samp,n,v,lambda,tol_it,tol,edge){
+  
+  p=nrow(samp)
+
+  #edge penalty
+  edge_penalty=rep(0,choose(p,2))
+  edge_penalty[which(edge==1)]=1/(n*v^2)
+  Lambda=matrix(rep(0,p^2),nrow=p,ncol=p)
+  Lambda[upper.tri(Lambda)]=edge_penalty
+  Lambda=Lambda+t(Lambda)
+  edge_list=matrix(rep(0,p^2),nrow=p,ncol=p)
+  edge_list[upper.tri(edge_list)]=edge
+  edge_list=edge_list+t(edge_list)
+  
+  rho=lambda/n
+  init_cov=diag(diag(samp))+rho*diag(p)
+  
+  # permutation matrix for looping through columns & rows
+  perms=matrix(NA,nrow=p-1,ncol=p)
+  permInt=1:p
+  for(i in 1:ncol(perms)){
+    perms[,i]<-permInt[-i]
+  }
+  
+  cov=init_cov
+  k=0
+  
+  for(i in 1:tol_it){
+  
+    cov_temp=cov 
+    
+    for(j in 1:p){
+      
+      cov11=cov_temp[perms[,j],perms[,j]]; omega11=solve(cov11)
+      cov12=cov_temp[perms[,j],j]
+      
+      s11=samp[perms[,j],perms[,j]]
+      s12=samp[perms[,j],j]
+      s22=samp[j,j]
+    
+      edge12=as.vector(edge_list[perms[,j],j])
+      edge12_list=which(edge12==1)
+      Lambda12=diag(Lambda[perms[,j],j])
+      
+      omega_s11=omega11%*%s11%*%omega11
+      u=t(cov12)%*%omega_s11%*%cov12-2*t(s12)%*%omega11%*%cov12+s22
+      u=as.numeric(u)
+      
+      gamma=(-1+sqrt(1+4*u*rho))/(2*rho)
+      
+      if(length(edge12_list)!=0){
+        quad_mat=(Lambda12+rho*omega11+omega_s11/gamma)[edge12_list,edge12_list]
+        obj_vec=(omega11%*%s12)[edge12_list]
+        beta=solve(quad_mat)%*%obj_vec/gamma
+        cov12[edge12_list]=beta
+      }
+    
+      cov_temp[j,j]=gamma+t(cov12)%*%omega11%*%cov12
+      cov_temp[perms[,j],j]=cov12
+      cov_temp[j,perms[,j]]=cov12
+      
+    }
+    error=sqrt(sum((cov_temp-cov)^2))
+    k=k+1
+    if(error<tol){
+      return(cov)
+    }else{
+      cov=cov_temp
+    }
+  }
+  return(cov)
+}
+```
+ 
+
+ Following code calculates the performance in terms of specificity (sp), sensitivity (se), root mean squared error (rmse), max norm (mnorm), and spectral norm (2norm). Also, it implements the model choice MPM and MAP.
+ 
+ 
+```{r}
+#median probability model (MPM)
+mpp=function(mat){
+  r=nrow(mat); c=ncol(mat)
+  result=numeric(length=c)
+  for(i in 1:c){
+    result[i]=as.numeric(mean(mat[,i])>=0.5)
+  }
+  return(result)
+}
+
+#maximum a probability (MAP)
+mmp=function(mat){
+
+  temp=as.data.frame(mat)
+  temp=temp%>%group_by_all%>%count
+  l=ncol(temp)
+  
+  n=temp$n
+  ind=which(n==max(n))
+  model=as.numeric(temp[ind,1:(l-1)])
+  return(model)
+}
+
+#root mean squared error (rmse)
+rmse=function(mat1,mat2){
+  p=nrow(mat1)
+  val=sqrt(sum((mat1-mat2)^2))/p
+  return(val)
+}
+
+#max norm (mnorm)
+mnorm=function(mat1,mat2){
+  temp=abs(mat1-mat2)
+  val=max(temp)
+  return(val)
+}
+
+#spectral norm (2norm)
+spec_norm=function(mat1,mat2){
+  temp=mat1-mat2
+  temp=t(temp)%*%temp
+  val=sqrt(max(eigen(temp)$values))
+  return(val)
+}
+
+# edge count (covariance structure indicator)
+edge_ind=function(m,tol){
+  edge_list=m[upper.tri(m)]
+  edge_indicator=as.numeric((abs(edge_list)>=tol))
+  return(edge_indicator)
+}
+
+#accuracy (specificity, sensitivity)
+accuracy=function(edge1,edge2){
+  
+  edge_ind1=which(edge1==1)
+  edge_ind0=which(edge1==0)
+  
+  true_edge1=which(edge2==1)
+  true_edge0=which(edge2==0)
+  
+  
+  tp=length(intersect(edge_ind1,true_edge1))
+  tn=length(intersect(edge_ind0,true_edge0))
+  fp=length(intersect(edge_ind1,true_edge0))
+  fn=length(intersect(edge_ind0,true_edge1))
+  
+  sp=tn/(tn+fp)
+  se=tp/(tp+fn)
+  return(c(sp,se))
+}
+```
+
+ 
+  Following code implements our proposed method.
+
+
+```{r} 
+# objective function defined in the article
+
+objec=function(m,n,samp,edge,v,lambda){
+  m_upper=m[upper.tri(m)]
+  ind=which(edge==1)
+  if(length(ind)>0){
+    m_upper=m_upper[which(edge==1)] 
+  }else{
+    m_upper=0
+  }
+  omega=solve(m)
+  value=log(det(m))+sum(diag(samp%*%omega))+1/(n*v^2)*sum(m_upper^2)+lambda/n*sum(diag(m))
+  return(value)
+}
+
+# Calculation of Hessian matrix in Laplace approximation
+
+hessian=function(cov,s,edge,n,v){
+  
+  ind=which(edge==1)
+  edge_no=sum(edge)
+  p=nrow(cov)
+  omega=solve(cov)
+  u=omega%*%s%*%omega
+  
+  E=array(NA,dim=c(1,2,0))
+  for(k in 1:(p-1)){
+    for(l in (k+1):p){
+      E=array(c(E,c(l,k)),dim=dim(E)+c(0,0,1))
+    }
+  }
+  E=matrix(E,ncol=2,byrow=TRUE)
+  edge_list=E[ind,]
+  
+  if(edge_no==0){
+    h=matrix(rep(0,p^2),nrow=p)
+    for(i in 1:p){
+      for(l in i:p){
+        h[i,l]=2*u[i,l]*omega[l,i]-(omega[i,l])^2
+      }
+    }
+    h=h+t(h)-diag(diag(h))
+    return(h)
+  }else{
+  h=matrix(nrow=p+edge_no,ncol=p+edge_no)
+  
+  h11=matrix(rep(0,p^2),nrow=p)
+  for(i in 1:p){
+    for(l in i:p){
+      h11[i,l]=2*u[i,l]*omega[l,i]-(omega[i,l])^2
+    }
+  }
+  h11=h11+t(h11)-diag(diag(h11))
+  h[1:p,1:p]=h11
+  
+  h12=matrix(rep(0,p*edge_no),nrow=p)
+  for(i in 1:p){
+    for(l in 1:edge_no){
+      a=edge_list[l,1]; b=edge_list[l,2]
+      h12[i,l]=2*(-omega[a,i]*omega[b,i]+u[a,i]*omega[b,i]+u[b,i]*omega[a,i])
+    }
+  }
+  h[1:p,(p+1):(p+edge_no)]=h12
+  h[(p+1):(p+edge_no),1:p]=t(h12)
+  
+  h22=matrix(rep(0,edge_no^2),nrow=edge_no)
+  for(i in 1:edge_no){
+    for(l in i:edge_no){
+      a=edge_list[i,1]; b=edge_list[i,2]
+      c=edge_list[l,1]; d=edge_list[l,2]
+      h22[i,l]=2*(-omega[a,c]*omega[b,d]-omega[a,d]*omega[b,c]
+                 +u[b,c]*omega[a,d]+u[b,d]*omega[a,c]+u[c,a]*omega[b,d]+u[d,a]*omega[b,c])
+    }
+  }
+  h22=h22+t(h22)-diag(diag(h22))+diag(rep(2/(n*v^2),edge_no))
+  h[(p+1):(p+edge_no),(p+1):(p+edge_no)]=h22
+  return(h)
+  }
+}
+
+# Calulation of Posterior ratio in Metropolis-Hastings algorithm
+
+post_ratio=function(m1,m2,eigen1,eigen2,n,samp,edge1,edge2,v,lambda,q){
+  post1=objec(m1,n,samp,edge1,v,lambda); post2=objec(m2,n,samp,edge2,v,lambda)
+  
+  post_diff=post1-post2
+  edge_diff=sum(edge1)-sum(edge2)
+  
+  l1=length(eigen1); l2=length(eigen2)
+  if(l1>l2){
+    eigen2[(l2+1):l1]=1
+  }
+  if(l1<l2){
+    eigen1[(l1+1):l2]=1
+  }
+  eigen_ratio=abs(prod(eigen1/eigen2))
+  result=(q/((1-q)*v*sqrt(2*pi))*sqrt(4*pi/n))^edge_diff*exp(-n/2*post_diff)*1/sqrt(eigen_ratio)
+  return(result)
+}
+
+unif_samp=function(edge,p){
+  l=choose(p,2)
+  samp=sample(1:l,1)
+  result=edge
+  if(edge[samp]==1){
+    result[samp]=0
+  }
+  if(edge[samp]==0){
+    result[samp]=1
+  }
+  return(result)
+}
+
+# generating MCMC samples through Metropolis-Hastings algorithm
+
+mcmc=function(n,s,v,lambda,tol,size,burnin,q){
+  
+  #initial covariance structure indicator 
+  
+  p=nrow(s)
+  edge_temp=edge_ind(s,0.1^3)
+  edge_temp_ind=which(edge_temp==1)
+  edge_temp_ind=sample(edge_temp_ind,100,replace=FALSE)
+  edge_temp[-edge_temp_ind]=0
+  cov_temp=bcd_covariance2(s,n,v,lambda,10000,0.1^3,edge_temp)
+  hessian_temp=hessian(cov_temp,s,edge_temp,n,v)
+  eigen_temp=eigen(hessian_temp)$values
+  total_samp=matrix(rep(0,size*choose(p,2)),nrow=size)
+  
+  # Metropolis-Hastings algorithm
+  
+  for(i in 1:(size+burnin)){
+    if(i<=burnin){
+      edge_cand=unif_samp(edge_temp,p)
+      cov_cand=bcd_covariance2(s,n,v,lambda,10000,tol,edge_cand)
+      hessian_cand=hessian(cov_cand,s,edge_cand,n,v)
+      eigen_cand=eigen(hessian_cand)$values
+      alpha=min(c(1,post_ratio(cov_cand,cov_temp,eigen_cand,eigen_temp,n,s,edge_cand,edge_temp,v,lambda,q)))
+      u=runif(1,0,1)
+      
+      if(u<=alpha){
+        edge_temp=edge_cand
+        cov_temp=cov_cand
+        hessian_temp=hessian_cand
+        eigen_temp=eigen_cand
+      }
+      if(i%%100==0){
+        print(paste(i,"th burnin",sep=""))
+      }
+    }else{
+      edge_cand=unif_samp(edge_temp,p)
+      cov_cand=bcd_covariance2(s,n,v,lambda,10000,tol,edge_cand)
+      hessian_cand=hessian(cov_cand,s,edge_cand,n,v)
+      eigen_cand=eigen(hessian_cand)$values
+      alpha=min(c(1,post_ratio(cov_cand,cov_temp,eigen_cand,eigen_temp,n,s,edge_cand,edge_temp,v,lambda,q)))
+      u=runif(1,0,1)
+      if(u<=alpha){
+        edge_temp=edge_cand
+        cov_temp=cov_cand
+        hessian_temp=hessian_cand
+        eigen_temp=eigen_cand
+      }
+      total_samp[i-burnin,]=edge_temp
+      if(i%%100==0){
+        print(paste(i-burnin,"th sample",sep=""))
+      }
+    }
+  }
+  return(total_samp)
+}
+
+# implement model choice and calculate performance
+
+bayesian_measure=function(n,v,lambda,tol,size,burnin,q,rep,true_cov){
+  
+  temp1=numeric(length=rep); temp2=numeric(length=rep)
+  temp3=numeric(length=rep); temp4=numeric(length=rep)
+  temp5=numeric(length=rep); temp6=numeric(length=rep)
+  temp7=numeric(length=rep); temp8=numeric(length=rep)
+  temp9=numeric(length=rep); temp10=numeric(length=rep)
+
+  true_edge=edge_ind(true_cov,0.1^3)
+
+  for(i in 1:rep){
+   print(paste(c("replication: ",i),sep=""))
+   samp=rmvnorm(n,sigma=true_cov)
+   s=t(samp)%*%samp/n
+   mcmc_samp=mcmc(n,s,v,lambda,tol,size,burnin,q)
+   
+   # Model Choice MPP or MAP
+   mcmc_mpp=mpp(mcmc_samp)
+   mcmc_mmp=mmp(mcmc_samp)
+   
+   # Covariance estimation based on the model choice
+   mpp_bcd=bcd_covariance2(s,n,v,lambda,10000,tol,mcmc_mpp)
+   mmp_bcd=bcd_covariance2(s,n,v,lambda,10000,tol,mcmc_mmp)
+   
+   temp1[i]=rmse(mpp_bcd,true_cov)
+   temp2[i]=mnorm(mpp_bcd,true_cov)
+   temp3[i]=spec_norm(mpp_bcd,true_cov)
+   
+   acc_mpp=accuracy(mcmc_mpp,true_edge)
+   
+   temp4[i]=acc_mpp[1]
+   temp5[i]=acc_mpp[2]
+   
+   temp6[i]=rmse(mmp_bcd,true_cov)
+   temp7[i]=mnorm(mmp_bcd,true_cov)
+   temp8[i]=spec_norm(mmp_bcd,true_cov)
+   
+   acc_mmp=accuracy(mcmc_mmp,true_edge)
+   
+   temp9[i]=acc_mmp[1]
+   temp10[i]=acc_mmp[2]
+  }
+  measure=list(mpp_rmse=temp1,mpp_mnorm=temp2,mpp_spec=temp3,mpp_sp=temp4,mpp_se=temp5, mmp_rmse=temp6, mmp_mnorm=temp7, mmp_spec=temp8, mmp_sp=temp9,mmp_se=temp10)
+  return(measure)
+}
+```
+
+
+ Now we simulate our proposed methods and competing methods (graphical lasso and sample covariance matrix). Note that we consider $p=50 (n=100)$.
+
+
+```{r cache=TRUE}
+# covariance matrix 
+omega=matrix(0,ncol=50,nrow=50)
+for(i in 1:50){
+  for(j in i:50){
+    omega[i,j]=0.75^{abs(i-j)}
+  }
+}
+omega=omega+t(omega)-diag(50)
+cov=solve(omega)
+
+#true covariance structure indicator
+true_edge=edge_ind(cov,0.1^3)
+
+set.seed(1)
+samp=rmvnorm(100,sigma=cov)
+s=t(samp)%*%samp/100
+
+#sample covariance matrix
+rmse_samp=numeric(); mnorm_samp=numeric(); spec_samp=numeric()
+sp_samp=numeric();se_samp=numeric()
+
+rmse_samp=rmse(s,cov)
+mnorm_samp=mnorm(s,cov)
+spec_samp=spec_norm(s,cov)
+
+samp_edge=edge_ind(s,0.1^3)
+acc_samp=accuracy(samp_edge,true_edge)
+sp_samp=acc_samp[1]
+se_samp=acc_samp[2]
+
+# Simulation result for sample covariance matrix
+rmse_samp; mnorm_samp; spec_samp; sp_samp; se_samp
+
+#graphical lasso
+step.size=50
+tol=0.01
+P=matrix(1,50,50)
+diag(P)=0
+lam=0.06
+
+mm=spcov(Sigma=s,S=s,lambda=lam*P,step.size=step.size,n.inner.steps=200,
+           thr.inner=0,tol.outer=tol,trace=1)$Sigma
+  
+gl_edge=edge_ind(mm,0.1^3)
+
+rmse_gl=numeric(); mnorm_gl=numeric(); spec_gl=numeric()
+sp_gl=numeric();se_gl=numeric()
+
+rmse_gl=rmse(mm,cov)
+mnorm_gl=mnorm(mm,cov)
+spec_gl=spec_norm(mm,cov)
+
+acc_gl=accuracy(gl_edge,true_edge)
+sp_gl=acc_gl[1]
+se_gl=acc_gl[2]
+
+# Simulation result for graphical lasso
+rmse_gl; mnorm_gl; spec_gl; sp_gl; se_gl
+
+#Bayesian
+
+choice=bayesian_measure(100,1,100*0.06,0.1^3,12000,3000,4/49,1,cov)
+
+rmse_mpp=numeric(); mnorm_mpp=numeric(); spec_mpp=numeric(); sp_mpp=numeric(); se_mpp=numeric()
+
+rmse_map=numeric(); mnorm_map=numeric(); spec_map=numeric(); sp_map=numeric(); se_map=numeric()
+
+rmse_mpm=choice[[1]]; mnorm_mpm=choice[[2]]; spec_mpm=choice[[3]]; sp_mpm=choice[[4]]; se_mpm=choice[[5]]
+rmse_map=choice[[6]]; mnorm_map=choice[[7]]; spec_map=choice[[8]];
+sp_map=choice[[9]]; se_map=choice[[10]]
+
+# Simulation result for our proposed method under MPM
+rmse_mpm; mnorm_mpm; spec_mpm; sp_mpm; se_mpm
+
+# Simulation result for our proposed method under MAP
+rmse_map; mnorm_map; spec_map; sp_map; se_map
+```
+
