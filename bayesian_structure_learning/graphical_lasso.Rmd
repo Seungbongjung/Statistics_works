@@ -1,0 +1,1074 @@
+---
+title: "Gaussian Graphical Model Simulation"
+author: "Seungbongjung 2017-15716"
+date: '2021 02 08'
+output: html_document
+---
+
+  In this report, I implemented Graphical Lasso(denoted by 'GL') in both frequentist context and bayesian context. I simulated GL with four models and applied GL to real data, which will be described in the below, in order to compare performance between frequentist context and bayesian context. Let $\sum=(\sigma_{ij})$ be covariance matrix and $\Omega=(\omega_{ij})$ be its corresponding precision matrix. Four models used in the simulation are given as following: 
+ 
+ 
+  Model1: AR(1) model, $\sigma_{ij}=0.7^{|i-j|}$
+  
+  
+  Model2: AR(2) model, $\omega_{ii}=1, \omega_{i-1,i}=\omega_{i,i-1}=0.5, \omega_{i-2,i}=\omega_{i,i-2}=0.25$ 
+  
+  Model3: Star model, $\omega_{ii}=1, \omega_{1,i}=\omega_{i,1}=0.1$, and $\omega_{ij}=0$ otherwise. 
+  
+  Model4: Circle model, $\omega_{ii}=2,\omega_{i-1,i}=\omega_{i,i-1}=1,\omega_{1,p}=\omega_{p,1}=0.9$
+  
+  
+```{r warning=FALSE, message=FALSE}
+library(mvtnorm)
+library(glasso)
+library(tidyverse)
+library(ggm)
+library(igraph)
+library(gridExtra)
+library(sparsebn)
+
+p1=30; p2=50; p3=100;
+n1=100; n2=200
+lambda=seq(from=0,to=1,length=51)
+lambda=lambda[-1]
+```
+
+
+  Following functions implement GL and measure the performance of it. Function edge_count counts the edge between $i$th node and $j$th node.($i<j$) If $|\omega_{ij}|<0.1^3$, we may say there is no edge between $i$th node and $j$ node.   
+ 
+ 
+  Also, function graphical_lasso implements GL in frequentist context. With true covariance matrix $\sum$ given, it samples $X_1, X_2,\dots,X_n$ from $MVN(0,\sum)$ and caculates sample covriance matrix $S$. Then if penalty parameter $\rho$ is given, it gives estimator $\hat{\Omega}$ using GL. Objective function is given as following : 
+  
+  
+  $\hat{\Omega}=argmin_{\Omega>0}(tr(S\Omega)-\log\det\Omega+\rho\sum_{i\neq j}\Omega_{ij})$. 
+  
+  
+  Function bayesian_GL implements GL in bayesian context. Let $\mathbf{\Gamma}=(\gamma_{ij})$ be model indicator. We consider regular models only. Here regular model refers to the model whose model indicator and estimated model indicator coincide, otherwise non-regular model. Regularity is necessary for validity of Laplace approximation. With $\text{n}\times\text{p}$ data $X^{(n)}$ given, we have approximated posterior $\mathbf{p(\Gamma|X^{(n)})}$ of $\mathbf{\Gamma}$ as following:
+
+  
+  $\mathbf{p(\Gamma|X^{(n)})}\propto \mathbf{C_{\Gamma}}\exp(-n\mathbf{h_{\Gamma}(\Omega_{\Gamma}^*)}/2)(4\pi/n)^{(p+\# \mathbf{\Gamma})/2}[\det(\mathbf{H_{\Omega_{\Gamma}^*}})]^{-1/2}$ \\
+  
+  
+  where $\mathbf{C_{\Gamma}}=(2\pi)^{-np/2}q^{\# \mathbf{\Gamma}}(1-q)^{\binom{p}{2}-\#\mathbf{\Gamma}}(\frac{n\lambda}{2})^{p+\# \mathbf{\Gamma}}\text{I}(\# \mathbf{\Gamma}\leq \bar{r})$, $\displaystyle \mathbf{h_{\Gamma}}=-\log \det(\mathbf{\Omega_{\Gamma}})+\text{tr}(\hat{\mathbf{\Sigma}}\mathbf{\Omega_{\Gamma}})+2\lambda \sum_{\gamma_{ij}=1}|\omega_{\mathbf{\Gamma},ij}|+\lambda \sum_{i=1}^p \omega_{\mathbf{\Gamma},ii}$ and $\mathbf{\Omega_{\Gamma}^*}$ refers to estimated precision matrix corresponding to the model $\mathbf{\Gamma}$ through frequentist GL. Further, matrix $\mathbf{H_B}=((\mathbf{h_B}\{(i,j),(l,m)\}))$ is defined by $\mathbf{h_B}\{(i,j),(l,m)\}=\text{tr}(\mathbf{B}^{-1}\mathbf{E}_{(i,j)}\mathbf{B}^{-1}\mathbf{E}_{(l,m)})$, where $\mathbf{E}_{(i,j)}$ is matrix of appropriate size with 1 on (i,j), (j,i) entries and 0 elsewhere. Note $\mathbf{\Omega_{\Gamma}}=((\omega_{\mathbf{\Gamma},ij}))$ denotes the precision matrix corresponding to the model $\mathbf{\Gamma}$ and $\mathbf{\Omega_{\Gamma}}^*$ is the graphical lasso solution of the model $\mathbf{\Gamma}$.   
+
+
+ We use Metropolis-Hastings algorithm to obtain MCMC samples of $\mathbf{\Gamma}$. To do so, we suggest symmetric proposal distribution $q(G'|G)$. Let $\mathbf{\Gamma},\mathbf{\Gamma}'$ be model indicator of $G=(V,E),G'=(V,E')$ respectively. We sample $(i,j)$ from $\text{V}\times \text{V}$. If $\gamma(i,j)=0$, we set $\gamma'(i,j)=1$, else $\gamma'(i,j)=0$. Simply let $\gamma'(-i,-j)=\gamma(-i,-j)$ for other pairs. $q$ is indeed symmetric proposal distribution as we sample $G'$ uniformly from the graphs that differ from $G$ in one position, so we have equal probability to set $\gamma'(i,j)=1$ or $\gamma'(i,j)=0$. With this proposal distribution, we have Metrpolis-Hastings algorithm as following :  
+
+
+ Algorithm 
+ 
+ 
+ 0. Initial model indicator: $\mathbf{\Gamma}^{(0)}$, Given data : $X^{(n)}$
+ 
+ 
+ For $i=0,1,\dots,n$
+    
+ 
+ 1. $\mathbf{\Gamma}^{\text{temp}}\sim q(G^{\text{temp}}|G^{(0)})$
+
+  
+ 2. Check regularity of $\mathbf{\Gamma}^{\text{temp}}$. 
+ 
+ 
+ 3. If model $\mathbf{\Gamma}^{\text{temp}}$ is regular, $\mathbf{\Gamma}^{\text{cand}}=\mathbf{\Gamma}^{\text{temp}}$. Else, repeat 1~2. 
+ 
+ 
+ 4. $\alpha_i=\min\{1,\frac{\mathbf{p}(\mathbf{\Gamma}^{\text{cand}}|X^{(n)})}{\mathbf{p}(\mathbf{\Gamma}^{(i)}|X^{(n)})} \}$
+ 
+ 
+ 5. $U_i\sim U(0,1)$
+ 
+ 
+ 6. If $U_i\leq \alpha_i$, $\mathbf{\Gamma}^{(i+1)}=\mathbf{\Gamma}^{\text{cand}}$. Else, $\mathbf{\Gamma}^{(i+1)}=\mathbf{\Gamma}^{(i)}$. 
+ 
+ 
+ We use Median Probability Model(denoted by 'MPP') to select final model $\mathbf{\Gamma}$ from MCMC samples. Note that we set model size restriction $\bar{r}$ by the model size from frequentist GL.
+
+
+  Finally, function accuracy measures how $\Omega$ is accurate in terms of edge for frequentist GL. The function graphical_lasso repeats the frequentist GL for $k$ times and measure the performance for each time. We average each measure over these $k$ models and use this value as final performance measure. 
+  
+ 
+ Function accuracy_bayes measures how $\Omega$ is accurate in terms of edge for bayesian_GL. The function bayesian_GL repeats the bayesian GL for $k$ times and so we have $k$ samples of $\mathbf{\Gamma}$. We measure the peformance for each sample by comparing $\mathbf{\Gamma}^{(i)}$ and $\mathbf{\Gamma}_0$, where $\mathbf{\Gamma}_0$ denotes the true model indicator. Again, we average each measure over these $k$ models and use this value as final performance measure. 
+ 
+ 
+ The measures used in the simulation are SE(sensitivity), SP(specificity), MCC(Matthews Correlation Coefficient)and FPR(False Positive Rate). They are defined as following: 
+ 
+  
+  TP: True Positive, edges are present which are also present in the true model. 
+  
+  
+  TN: True Negative, edges are absent which are also absent in the true model.
+  
+  
+  FP: False Positive, edges are present which are absent in the true model. 
+  
+  
+  FN: False Negative, edges are absent which are prsent in the true model. 
+  
+  
+  $SP=\frac{TN}{TN+FP}, SE=\frac{TP}{TP+FN}, FPR=1-SP, MCC=\frac{TP\cdot TN-FP\cdot FN}{\sqrt{(TP+FP)(TP+FN)(TN+FP)(TN+FN)}}$
+  
+
+```{r}
+edge_count=function(m){
+  temp=m[upper.tri(m)]
+  temp=abs(temp)>0.1^3
+  return(temp)
+}
+
+#implements frequentist graphical lasso
+graphical_lasso=function(n,p,sigma,rho,iter,seed){
+  edge_temp=edge_count(solve(sigma))
+  result=list(tp=numeric(iter),tn=numeric(iter),fp=numeric(iter),fn=numeric(iter))
+  
+  for(i in 1:iter){
+    samp=rmvnorm(n,mean=rep(0,p),sigma)
+    samp_var=t(samp)%*%samp/n
+    estimated_var=glasso(s=samp_var,rho)
+    estimated_var=estimated_var$wi
+    estimated_var_temp=edge_count(estimated_var)
+    
+    result[[1]][i]=length(intersect(which(estimated_var_temp==1),which(edge_temp==1)))
+    result[[2]][i]=length(intersect(which(estimated_var_temp==0),which(edge_temp==0)))
+    result[[3]][i]=length(intersect(which(estimated_var_temp==1),which(edge_temp==0)))
+    result[[4]][i]=length(intersect(which(estimated_var_temp==0),which(edge_temp==1)))
+  }
+  return(result) 
+}
+
+accuracy=function(data){
+  tp=data[[1]]; tn=data[[2]]; fp=data[[3]]; fn=data[[4]]
+  sp=tn/(tn+fp)
+  se=tp/(tp+fn)
+  mcc=(tp*tn-fp*fn)/sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn))
+  fpr=1-sp
+  return(list(sp,se,mcc,fpr))
+}
+
+#implements bayesian graphical lasso 
+
+c_gamma=function(n,p,gamma1,gamma2,lambda,q,r){
+  gamma1=sum(gamma1)
+  gamma2=sum(gamma2)
+  gamma=gamma1-gamma2
+  rho=lambda*n
+  result=q^gamma*(1-q)^(-gamma)*(rho/2)^(gamma)*as.numeric(gamma1<=r)
+  return(result)
+}
+
+h_gamma=function(s,prec,lambda,n){
+  rho=lambda*n
+  temp=prec[upper.tri(prec)]
+  temp=abs(temp[which(abs(temp)>0.1^3)])
+  result=-log(det(prec))+sum(diag(s%*%prec))+rho/n*sum(diag(prec))+2*rho/n*sum(temp)
+  return(result)
+}
+
+H=function(mat,p){
+  mat_inv=solve(mat)
+  ind=matrix(rep(1:p,2),ncol=2)
+  temp=mat
+  temp[lower.tri(temp,diag=TRUE)]=0
+  mat_ind=which(abs(temp)>0.1^3,arr.ind=TRUE)
+  gamma_ind=rbind(ind,mat_ind)
+  n=nrow(gamma_ind)
+  result=matrix(rep(0,n^2),ncol=n)
+  for(a in 1:n){
+    for(b in a:n){
+      i=gamma_ind[a,][1]; j=gamma_ind[a,][2]; l=gamma_ind[b,][1]; m=gamma_ind[b,][2]
+      if((i!=j) & (l!=m)){
+        result[a,b]=2*(mat_inv[i,l]*mat_inv[j,m]+mat_inv[i,m]*mat_inv[j,l])
+      }
+      if((i==j) & (l!=m)){
+        result[a,b]=2*mat_inv[i,l]*mat_inv[i,m]
+      }
+      if((i==j) & (l==m)){
+        result[a,b]=(mat_inv[i,l])^2
+      }
+    }
+  }
+  result[lower.tri(result)]=t(result)[lower.tri(result)]
+  return(result)
+}
+
+posterior_ratio=function(n,p,s,prec1,prec2,q,lambda,gamma1,gamma2,r){
+ C=c_gamma(n,p,gamma1,gamma2,lambda,q,r)
+ h=h_gamma(s,prec1,lambda,n)-h_gamma(s,prec2,lambda,n)
+ ind=sum(gamma1)-sum(gamma2)
+ e1=eigen(H(prec2,p))$values; e2=eigen(H(prec1,p))$values
+ e1=prod(sqrt(abs(e1))); e2=prod(sqrt(abs(e2)))
+ H=e1/e2
+ result=C*(4*pi/n)^(ind/2)*H*exp(-n*h/2)
+ return(result)
+}
+
+q=function(gamma,p){
+  m=choose(p,2)
+  samp=sample(1:m,1)
+  result=gamma
+  if(gamma[samp]==1){
+    result[samp]=0
+  }
+  if(gamma[samp]==0){
+    result[samp]=1
+  }
+  return(result)
+}
+
+bayesian_GL=function(n,p,sigma,q,lambda,seed,iter1,iter2,burnin){
+  set.seed(seed)
+  m1=array(NA,dim=c(1,choose(p,2),iter1))
+  E_p=array(NA,dim=c(1,2,0))
+  for(k in 2:p){
+    for(l in 1:(k-1)){
+      E_p=array(c(E_p,c(l,k)),dim=dim(E_p)+c(0,0,1))
+    }
+  }
+  #Indicator of edge
+  E_p=matrix(E_p,ncol=2,byrow=TRUE)
+  
+  for(i in 1:iter1){
+  #iter1 refers to number of replications  
+   samp=rmvnorm(n,mean=rep(0,p),sigma=sigma)
+   s=1/n*t(samp)%*%samp
+   prec=glasso(s,rho=lambda)$wi
+   gamma=edge_count(prec)
+   r=sum(gamma)
+    gamma_int=gamma
+   for(j in 1:5){
+     gamma_int=q(gamma_int,p)
+   }
+   gamma=gamma_int
+   m2=array(NA,dim=c(1,choose(p,2),iter2))
+   for(j in 1:iter2){
+     #iter2 refers to number of MCMC samples including burn-in
+     #Sampling MCMC samples from Metropolis-Hastings algorithm 
+     gamma_temp=q(gamma,p)
+     prec_temp=glasso(s,rho=lambda,zero=E_p[as.logical(1-gamma_temp),])$wi
+     prec_gamma=edge_count(prec_temp)
+     #Checking validity of Laplace approximation(i.e. verifying regular model)
+     while(all(prec_gamma==gamma_temp)==0){
+        gamma_temp=q(gamma,p)
+        prec_temp=glasso(s,rho=lambda,zero=E_p[as.logical(1-gamma_temp),])$wi
+        prec_gamma=edge_count(prec_temp)
+      }
+     u=runif(1,0,1)
+     alpha=posterior_ratio(n,p,s,prec_temp,prec,q,lambda,gamma_temp,gamma,r)
+     alpha=min(c(1,alpha))
+     if(u<=alpha){
+       gamma=gamma_temp
+       prec=prec_temp
+     }
+     m2[,,j]=gamma
+     if(j%%100 == 0){
+     print(paste0("Replication : ",i," Iteration :",j))
+     }
+   }
+   z=iter2-burnin
+   m2_temp=m2[,,(burnin+1):iter2]
+   m_temp=rowSums(m2_temp,dims=1)
+   m_temp=as.vector(m_temp)/z
+   m_temp=as.numeric(m_temp>=0.5)
+   m1[,,i]=m_temp
+  }
+  return(m1)
+}
+
+accuracy_GL=function(estimated_gamma,true_gamma,k){
+  #k denotes the number of samples
+ performance=list(tp=numeric(k),tn=numeric(k),fp=numeric(k),fn=numeric(k))
+ for(i in 1:k){
+   estimate=as.vector(estimated_gamma[i,])
+   performance[[1]][i]=length(intersect(which(estimate==1),which(true_gamma==1)))
+   performance[[2]][i]=length(intersect(which(estimate==0),which(true_gamma==0)))
+   performance[[3]][i]=length(intersect(which(estimate==1),which(true_gamma==0)))
+   performance[[4]][i]=length(intersect(which(estimate==0),which(true_gamma==1)))
+ }
+ 
+ tp=performance[[1]]; tn=performance[[2]]; fp=performance[[3]]; fn=performance[[4]]
+  sp=tn/(tn+fp)
+  se=tp/(tp+fn)
+  mcc=(tp*tn-fp*fn)/sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn))
+  fpr=1-sp
+  return(list(sp,se,mcc,fpr))
+}
+
+bayesian_GL_data=function(n,p,s,q,lambda,seed,iter1,iter2,burnin){
+  set.seed(seed)
+  m1=array(NA,dim=c(1,choose(p,2),iter1))
+  E_p=array(NA,dim=c(1,2,0))
+  for(k in 2:p){
+    for(l in 1:(k-1)){
+      E_p=array(c(E_p,c(l,k)),dim=dim(E_p)+c(0,0,1))
+    }
+  }
+  #Indicator of edge
+  E_p=matrix(E_p,ncol=2,byrow=TRUE)
+  
+  for(i in 1:iter1){
+  #iter1 refers to number of replications  
+   prec=glasso(s,rho=lambda)$wi
+   gamma=edge_count(prec)
+   r=sum(gamma)
+   gamma_int=gamma
+   for(j in 1:5){
+     gamma_int=q(gamma_int,p)
+   }
+   gamma=gamma_int
+   m2=array(NA,dim=c(1,choose(p,2),iter2))
+   for(j in 1:iter2){
+     #iter2 refers to number of MCMC samples including burn-in
+     #Sampling MCMC samples from Metropolis-Hastings algorithm 
+     gamma_temp=q(gamma,p)
+     prec_temp=glasso(s,rho=lambda,zero=E_p[as.logical(1-gamma_temp),])$wi
+     prec_gamma=edge_count(prec_temp)
+     #Checking validity of Laplace approximation(i.e. verifying regular model)
+     while(all(prec_gamma==gamma_temp)==0){
+        gamma_temp=q(gamma,p)
+        prec_temp=glasso(s,rho=lambda,zero=E_p[as.logical(1-gamma_temp),])$wi
+        prec_gamma=edge_count(prec_temp)
+      }
+     u=runif(1,0,1)
+     alpha=posterior_ratio(n,p,s,prec_temp,prec,q,lambda,gamma_temp,gamma,r)
+     alpha=min(c(1,alpha))
+     if(u<=alpha){
+       gamma=gamma_temp
+       prec=prec_temp
+     }
+     m2[,,j]=gamma
+     if(j%%100 == 0){
+     print(paste0("Replication : ",i," Iteration :",j))
+     }
+   }
+   z=iter2-burnin
+   m2_temp=m2[,,(burnin+1):iter2]
+   m_temp=rowSums(m2_temp,dims=1)
+   m_temp=as.vector(m_temp)/z
+   m_temp=as.numeric(m_temp>=0.5)
+   m1[,,i]=m_temp
+  }
+  return(m1)
+}
+
+```
+
+
+ We implemented GL for $p=30,5,100$ and $n=100, 200$. Here $p$ notes the dimension and $n$ denotes the number of sample. For each model, we repeated the simulation for 50 times. If $n=100$, varying $\rho$ from 0.1 to 1, we plotted ROC curve for $p=30,50$ (Sensitivity versus FPR). We set penalty parameter $\rho$ as 0.5 for model 1,2,4 and 0.2 for model 3. Also, set $q=0.4$, which is the probability of accepting edges. Due to computational difficulty, we obtain 500 mcmc samples in Bayesian GL with 100 burn-in. Followings are models used for simulation and the implementation of frequentist GL.    
+
+
+```{r}
+#sigma1,sigma2,sigma3 refer to 30x30, 50x50, 100x100 matrices, respectively.  
+
+#Model1-AR(1)
+sigma=matrix(nrow=p3,ncol=p3)
+for(i in 1:p3){
+  for(j in 1:p3){
+    sigma[i,j]=0.7^{abs(i-j)}
+  }
+}
+
+model1_sigma1=sigma[1:p1,1:p1]
+model1_sigma2=sigma[1:p2,1:p2]
+model1_sigma3=sigma[1:p3,1:p3]
+
+#Model2-AR(2)
+omega=diag(p3)
+for(i in 1:p3){
+  if(i>1){
+    omega[i,i-1]=0.5
+    omega[i-1,i]=0.5
+  }
+  if(i>2){
+    omega[i,i-2]=0.25
+    omega[i-2,i]=0.25
+  }
+}
+
+model2_sigma1=solve(omega[1:p1,1:p1])
+model2_sigma2=solve(omega[1:p2,1:p2])
+model2_sigma3=solve(omega[1:p3,1:p3])
+
+#Model3-Star
+omega_star=diag(p3)
+for(i in 2:p3){
+  omega_star[1,i]=0.1
+  omega_star[i,1]=0.1
+}
+
+model3_sigma1=solve(omega_star[1:p1,1:p1])
+model3_sigma2=solve(omega_star[1:p2,1:p2])
+model3_sigma3=solve(omega_star[1:p3,1:p3])
+
+#Model4-Circle
+omega_circle1=2*diag(p1); omega_circle2=2*diag(p2); omega_circle3=2*diag(p3)
+
+for(i in 2:p1){
+  omega_circle1[i,i-1]=1
+  omega_circle1[i-1,i]=1
+}
+omega_circle1[1,p1]=0.9
+omega_circle1[p1,1]=0.9
+
+for(i in 2:p2){
+  omega_circle2[i,i-1]=1
+  omega_circle2[i-1,i]=1
+}
+omega_circle2[1,p2]=0.9
+omega_circle2[p2,1]=0.9
+
+for(i in 2:p3){
+  omega_circle3[i,i-1]=1
+  omega_circle3[i-1,i]=1
+}
+omega_circle3[1,p3]=0.9
+omega_circle3[p3,1]=0.9
+
+model4_sigma1=solve(omega_circle1)
+model4_sigma2=solve(omega_circle2)
+model4_sigma3=solve(omega_circle3)
+```
+
+
+```{r}
+#Implementation of frequentist GL
+
+#Model1-AR(1) 
+
+#p=30, n=100
+model1_samp1=graphical_lasso(n1,p1,model1_sigma1,0.5,50,seed=1)
+model1_samp1_acc=accuracy(model1_samp1)
+
+model1_samp1_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p1,model1_sigma1,lambda[i],1,seed=1)
+  samp_temp=accuracy(samp_temp)
+  model1_samp1_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model1_samp1_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=30, n=200
+model1_samp2=graphical_lasso(n2,p1,model1_sigma1,0.5,50,seed=2)
+model1_samp2_acc=accuracy(model1_samp2)
+
+#p=50, n=100
+model1_samp3=graphical_lasso(n1,p2,model1_sigma2,0.5,50,seed=3)
+model1_samp3_acc=accuracy(model1_samp3)
+
+model1_samp3_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p2,model1_sigma2,lambda[i],1,seed=3)
+  samp_temp=accuracy(samp_temp)
+  model1_samp3_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model1_samp3_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=50, n=200
+model1_samp4=graphical_lasso(n2,p2,model1_sigma2,0.5,50,seed=4)
+model1_samp4_acc=accuracy(model1_samp4)
+
+#p=100, n=100
+model1_samp5=graphical_lasso(n1,p3,model1_sigma3,0.5,50,seed=5)
+model1_samp5_acc=accuracy(model1_samp5)
+
+#p=100, n=200
+model1_samp6=graphical_lasso(n2,p3,model1_sigma3,0.5,50,seed=6)
+model1_samp6_acc=accuracy(model1_samp6)
+
+
+#Model2-AR(2)
+
+#p=30, n=100
+model2_samp1=graphical_lasso(n1,p1,model2_sigma1,0.5,50,seed=7)
+model2_samp1_acc=accuracy(model2_samp1)
+
+model2_samp1_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p1,model2_sigma1,lambda[i],1,seed=7)
+  samp_temp=accuracy(samp_temp)
+  model2_samp1_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model2_samp1_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=30, n=200
+model2_samp2=graphical_lasso(n2,p1,model2_sigma1,0.5,50,seed=8)
+model2_samp2_acc=accuracy(model2_samp2)
+
+#p=50, n=100
+model2_samp3=graphical_lasso(n1,p2,model2_sigma2,0.5,50,seed=9)
+model2_samp3_acc=accuracy(model2_samp3)
+
+model2_samp3_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p2,model2_sigma2,lambda[i],1,seed=9)
+  samp_temp=accuracy(samp_temp)
+  model2_samp3_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model2_samp3_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=50, n=200
+model2_samp4=graphical_lasso(n2,p2,model2_sigma2,0.5,50,seed=10)
+model2_samp4_acc=accuracy(model2_samp4)
+
+#p=100, n=100
+model2_samp5=graphical_lasso(n1,p3,model2_sigma3,0.5,50,seed=11)
+model2_samp5_acc=accuracy(model2_samp5)
+
+#p=100, n=200
+model2_samp6=graphical_lasso(n2,p3,model2_sigma3,0.5,50,seed=12)
+model2_samp6_acc=accuracy(model2_samp6)
+
+
+#Model3-Star model
+
+#p=30, n=100
+model3_samp1=graphical_lasso(n1,p1,model3_sigma1,0.2,50,seed=13)
+model3_samp1_acc=accuracy(model3_samp1)
+
+model3_samp1_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p1,model3_sigma1,lambda[i],1,seed=13)
+  samp_temp=accuracy(samp_temp)
+  model3_samp1_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model3_samp1_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=30, n=200
+model3_samp2=graphical_lasso(n2,p1,model3_sigma1,0.2,50,seed=14)
+model3_samp2_acc=accuracy(model3_samp2)
+
+#p=50, n=100
+model3_samp3=graphical_lasso(n1,p2,model3_sigma2,0.2,50,seed=15)
+model3_samp3_acc=accuracy(model3_samp3)
+
+model3_samp3_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p2,model3_sigma2,lambda[i],1,seed=15)
+  samp_temp=accuracy(samp_temp)
+  model3_samp3_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model3_samp3_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=50, n=200
+model3_samp4=graphical_lasso(n2,p2,model3_sigma2,0.2,50,seed=16)
+model3_samp4_acc=accuracy(model3_samp4)
+
+#p=100, n=100
+model3_samp5=graphical_lasso(n1,p3,model3_sigma3,0.2,50,seed=17)
+model3_samp5_acc=accuracy(model3_samp5)
+
+#p=100, n=200
+model3_samp6=graphical_lasso(n2,p3,model3_sigma3,0.2,50,seed=18)
+model3_samp6_acc=accuracy(model3_samp6)
+
+
+#Model4-Circle model
+
+#p=30, n=100
+model4_samp1=graphical_lasso(n1,p1,model4_sigma1,0.5,50,seed=19)
+model4_samp1_acc=accuracy(model4_samp1)
+
+model4_samp1_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p1,model4_sigma1,lambda[i],1,seed=19)
+  samp_temp=accuracy(samp_temp)
+  model4_samp1_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model4_samp1_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=30, n=200
+model4_samp2=graphical_lasso(n2,p1,model4_sigma1,0.5,50,seed=20)
+model4_samp2_acc=accuracy(model4_samp2)
+
+#p=50, n=100
+model4_samp3=graphical_lasso(n1,p2,model4_sigma2,0.5,50,seed=21)
+model4_samp3_acc=accuracy(model4_samp3)
+
+model4_samp3_roc=list(fpr=numeric(50),se=numeric(50))
+for(i in 1:50){
+  samp_temp=graphical_lasso(n1,p2,model4_sigma2,lambda[i],1,seed=21)
+  samp_temp=accuracy(samp_temp)
+  model4_samp3_roc[[1]][51-i]=mean(samp_temp[[4]])
+  model4_samp3_roc[[2]][51-i]=mean(samp_temp[[2]])
+}
+
+#p=50, n=200
+model4_samp4=graphical_lasso(n2,p2,model4_sigma2,0.5,50,seed=22)
+model4_samp4_acc=accuracy(model4_samp4)
+
+#p=100, n=100
+model4_samp5=graphical_lasso(n1,p3,model4_sigma3,0.5,50,seed=23)
+model4_samp5_acc=accuracy(model4_samp5)
+
+#p=100, n=200
+model4_samp6=graphical_lasso(n2,p3,model4_sigma3,0.5,50,seed=24)
+model4_samp6_acc=accuracy(model4_samp6)
+```
+
+
+```{r eval=FALSE}
+#Implementation of Bayesian GL
+
+#Model1-AR(1)
+
+#p=30, n=100
+model1_sigma1_samp1_bayes=bayesian_GL(n1,p1,model1_sigma1,0.4,0.5,1,50,500,100)
+
+model1_sigma1_roc_bayes=matrix(NA,nrow=50,ncol=choose(p1,2))
+for(i in 1:50){
+  model1_sigma1_roc_bayes[i,]=bayesian_GL(n1,p1,model1_sigma1,0.4,lambda[i],1,1,500,100)[,,i]
+}
+
+#p=30, n=200
+model1_sigma1_samp2_bayes=bayesian_GL(n2,p1,model1_sigma1,0.4,0.5,2,50,500,100)
+
+#p=50, n=100
+model1_sigma2_samp1_bayes=bayesian_GL(n1,p2,model1_sigma2,0.4,0.5,3,50,500,100)
+
+model1_sigma2_roc_bayes=matrix(NA,nrow=50,ncol=choose(p2,2))
+for(i in 1:50){
+  model1_sigma2_roc_bayes[i,]=bayesian_GL(n1,p2,model1_sigma2,0.4,lambda[i],3,1,500,100)[,,i]
+}
+
+#p=50, n=200
+model1_sigma2_samp2_bayes=bayesian_GL(n2,p2,model1_sigma2,0.4,0.5,4,50,500,100)
+
+#p=100, n=100
+model1_sigma3_samp1_bayes=bayesian_GL(n1,p3,model1_sigma3,0.4,0.5,5,50,500,100)
+
+#p=100, n=200
+model1_sigma3_samp2_bayes=bayesian_GL(n2,p3,model1_sigma3,0.4,0.5,6,50,500,100)
+
+
+#Model2-AR(2)
+
+#p=30, n=100
+model2_sigma1_samp1_bayes=bayesian_GL(n1,p1,model2_sigma1,0.4,0.5,7,50,500,100)
+
+model2_sigma1_roc_bayes=matrix(NA,nrow=50,ncol=choose(p1,2))
+for(i in 1:50){
+  model2_sigma1_roc_bayes[i,]=bayesian_GL(n1,p1,model2_sigma1,0.4,lambda[i],7,1,500,100)[,,i]
+}
+
+#p=30, n=200
+model2_sigma1_samp2_bayes=bayesian_GL(n2,p1,model2_sigma1,0.4,0.5,8,50,500,100)
+
+#p=50, n=100
+model2_sigma2_samp1_bayes=bayesian_GL(n1,p2,model2_sigma2,0.4,0.5,9,50,500,100)
+
+model2_sigma2_roc_bayes=matrix(NA,nrow=50,ncol=choose(p2,2))
+for(i in 1:50){
+  model2_sigma2_roc_bayes[i,]=bayesian_GL(n1,p2,model2_sigma2,0.4,lambda[i],9,1,500,100)[,,i]
+}
+
+#p=50, n=200
+model2_sigma2_samp2_bayes=bayesian_GL(n2,p2,model2_sigma2,0.4,0.5,10,50,500,100)
+
+#p=100, n=100
+model2_sigma3_samp1_bayes=bayesian_GL(n1,p3,model2_sigma3,0.4,0.5,11,50,500,100)
+
+#p=100, n=200
+model2_sigma3_samp2_bayes=bayesian_GL(n2,p3,model2_sigma3,0.4,0.5,12,50,500,100)
+
+#Model3-Star
+
+#p=30, n=100
+model3_sigma1_samp1_bayes=bayesian_GL(n1,p1,model3_sigma1,0.4,0.2,13,50,500,100)
+
+model3_sigma1_roc_bayes=matrix(NA,nrow=50,ncol=choose(p1,2))
+for(i in 1:50){
+  model3_sigma1_roc_bayes[i,]=bayesian_GL(n1,p1,model3_sigma1,0.4,lambda[i],13,1,500,100)[,,i]
+}
+
+#p=30, n=200
+model3_sigma1_samp2_bayes=bayesian_GL(n2,p1,model3_sigma1,0.4,0.2,14,50,500,100)
+
+#p=50, n=100
+model3_sigma2_samp1_bayes=bayesian_GL(n1,p2,model3_sigma2,0.4,0.2,15,50,500,100)
+
+model3_sigma2_roc_bayes=matrix(NA,nrow=50,ncol=choose(p2,2))
+for(i in 1:50){
+  model3_sigma2_roc_bayes[i,]=bayesian_GL(n1,p2,model3_sigma2,0.4,lambda[i],15,1,500,100)[,,i]
+}
+
+#p=50, n=200
+model3_sigma2_samp2_bayes=bayesian_GL(n2,p2,model3_sigma2,0.4,0.2,16,50,500,100)
+
+#p=100, n=100
+model3_sigma3_samp1_bayes=bayesian_GL(n1,p3,model3_sigma3,0.4,0.2,17,50,500,100)
+
+#p=100, n=200
+model3_sigma3_samp2_bayes=bayesian_GL(n2,p3,model3_sigma3,0.4,0.2,18,50,500,100)
+
+
+#Model4-Circle
+
+#p=30, n=100
+model4_sigma1_samp1_bayes=bayesian_GL(n1,p1,model4_sigma1,0.4,0.5,19,50,500,100)
+
+model4_sigma1_roc_bayes=matrix(NA,nrow=50,ncol=choose(p1,2))
+for(i in 1:50){
+  model4_sigma1_roc_bayes[i,]=bayesian_GL(n1,p1,model4_sigma1,0.4,lambda[i],19,1,500,100)[,,i]
+}
+
+#p=30, n=200
+model4_sigma1_samp2_bayes=bayesian_GL(n2,p1,model4_sigma1,0.4,0.5,20,50,500,100)
+
+#p=50, n=100
+model4_sigma2_samp1_bayes=bayesian_GL(n1,p2,model4_sigma2,0.4,0.5,21,50,500,100)
+
+model4_sigma2_roc_bayes=matrix(NA,nrow=50,ncol=choose(p2,2))
+for(i in 1:50){
+  model4_sigma2_roc_bayes[i,]=bayesian_GL(n1,p2,model4_sigma2,0.4,lambda[i],15,1,500,100)[,,i]
+}
+
+#p=50, n=200
+model4_sigma2_samp2_bayes=bayesian_GL(n2,p2,model4_sigma2,0.4,0.5,22,50,500,100)
+
+#p=100, n=100
+model4_sigma3_samp1_bayes=bayesian_GL(n1,p3,model4_sigma3,0.4,0.5,23,50,500,100)
+
+#p=100, n=200
+model4_sigma3_samp2_bayes=bayesian_GL(n2,p3,model4_sigma3,0.4,0.5,24,50,500,100)
+```
+
+
+```{r echo=FALSE}
+model1_sigma1_samp1_bayes=read.csv("./samp/model1_sigma1_samp1_bayes.csv")[,-1]
+model1_sigma1_samp2_bayes=read.csv("./samp/model1_sigma1_samp2_bayes.csv")[,-1]
+model1_sigma2_samp1_bayes=read.csv("./samp/model1_sigma2_samp1_bayes.csv")[,-1]
+model1_sigma2_samp2_bayes=read.csv("./samp/model1_sigma2_samp2_bayes.csv")[,-1]
+model1_sigma3_samp1_bayes=read.csv("./samp/model1_sigma3_samp1_bayes.csv")[,-1]
+model1_sigma3_samp2_bayes=read.csv("./samp/model1_sigma3_samp2_bayes.csv")[,-1]
+model2_sigma1_samp1_bayes=read.csv("./samp/model2_sigma1_samp1_bayes.csv")[,-1]
+model2_sigma1_samp2_bayes=read.csv("./samp/model2_sigma1_samp2_bayes.csv")[,-1]
+model2_sigma2_samp1_bayes=read.csv("./samp/model2_sigma2_samp1_bayes.csv")[,-1]
+model2_sigma2_samp2_bayes=read.csv("./samp/model2_sigma2_samp2_bayes.csv")[,-1]
+model2_sigma3_samp1_bayes=read.csv("./samp/model2_sigma3_samp1_bayes.csv")[,-1]
+model2_sigma3_samp2_bayes=read.csv("./samp/model2_sigma3_samp2_bayes.csv")[,-1]
+model3_sigma1_samp1_bayes=read.csv("./samp/model3_sigma1_samp1_bayes.csv")[,-1]
+model3_sigma1_samp2_bayes=read.csv("./samp/model3_sigma1_samp2_bayes.csv")[,-1]
+model3_sigma2_samp1_bayes=read.csv("./samp/model3_sigma2_samp1_bayes.csv")[,-1]
+model3_sigma2_samp2_bayes=read.csv("./samp/model3_sigma2_samp2_bayes.csv")[,-1]
+model3_sigma3_samp1_bayes=read.csv("./samp/model3_sigma3_samp1_bayes.csv")[,-1]
+model3_sigma3_samp2_bayes=read.csv("./samp/model3_sigma3_samp2_bayes.csv")[,-1]
+model4_sigma1_samp1_bayes=read.csv("./samp/model4_sigma1_samp1_bayes.csv")[,-1]
+model4_sigma1_samp2_bayes=read.csv("./samp/model4_sigma1_samp2_bayes.csv")[,-1]
+model4_sigma2_samp1_bayes=read.csv("./samp/model4_sigma2_samp1_bayes.csv")[,-1]
+model4_sigma2_samp2_bayes=read.csv("./samp/model4_sigma2_samp2_bayes.csv")[,-1]
+model4_sigma3_samp1_bayes=read.csv("./samp/model4_sigma3_samp1_bayes.csv")[,-1]
+model4_sigma3_samp2_bayes=read.csv("./samp/model4_sigma3_samp2_bayes.csv")[,-1]
+
+model1_sigma1_roc_bayes=read.csv("./roc/model1_sigma1_roc.csv")[,-1]
+model1_sigma2_roc_bayes=read.csv("./roc/model1_sigma2_roc.csv")[,-1]
+model2_sigma1_roc_bayes=read.csv("./roc/model2_sigma1_roc.csv")[,-1]
+model2_sigma2_roc_bayes=read.csv("./roc/model2_sigma2_roc.csv")[,-1]
+model3_sigma1_roc_bayes=read.csv("./roc/model3_sigma1_roc.csv")[,-1]
+model3_sigma2_roc_bayes=read.csv("./roc/model3_sigma2_roc.csv")[,-1]
+model4_sigma1_roc_bayes=read.csv("./roc/model4_sigma1_roc.csv")[,-1]
+model4_sigma2_roc_bayes=read.csv("./roc/model4_sigma2_roc.csv")[,-1]
+```
+
+
+```{r}
+#calculate measures of performance for Bayesian GL
+model1_sigma1_gamma=as.numeric(edge_count(solve(model1_sigma1)))
+model1_sigma2_gamma=as.numeric(edge_count(solve(model1_sigma2)))
+model1_sigma3_gamma=as.numeric(edge_count(solve(model1_sigma3)))
+model2_sigma1_gamma=as.numeric(edge_count(solve(model2_sigma1)))
+model2_sigma2_gamma=as.numeric(edge_count(solve(model2_sigma2)))
+model2_sigma3_gamma=as.numeric(edge_count(solve(model2_sigma3)))
+model3_sigma1_gamma=as.numeric(edge_count(solve(model3_sigma1)))
+model3_sigma2_gamma=as.numeric(edge_count(solve(model3_sigma2)))
+model3_sigma3_gamma=as.numeric(edge_count(solve(model3_sigma3)))
+model4_sigma1_gamma=as.numeric(edge_count(omega_circle1))
+model4_sigma2_gamma=as.numeric(edge_count(omega_circle2))
+model4_sigma3_gamma=as.numeric(edge_count(omega_circle3))
+
+model1_sigma1_bayes_acc1=accuracy_GL(model1_sigma1_samp1_bayes,model1_sigma1_gamma,50)
+model1_sigma1_bayes_acc2=accuracy_GL(model1_sigma1_samp2_bayes,model1_sigma1_gamma,50)
+model1_sigma2_bayes_acc1=accuracy_GL(model1_sigma2_samp1_bayes,model1_sigma2_gamma,50)
+model1_sigma2_bayes_acc2=accuracy_GL(model1_sigma2_samp2_bayes,model1_sigma2_gamma,50)
+model1_sigma3_bayes_acc1=accuracy_GL(model1_sigma3_samp1_bayes,model1_sigma3_gamma,50)
+model1_sigma3_bayes_acc2=accuracy_GL(model1_sigma3_samp2_bayes,model1_sigma3_gamma,50)
+model2_sigma1_bayes_acc1=accuracy_GL(model2_sigma1_samp1_bayes,model2_sigma1_gamma,50)
+model2_sigma1_bayes_acc2=accuracy_GL(model2_sigma1_samp2_bayes,model2_sigma1_gamma,50)
+model2_sigma2_bayes_acc1=accuracy_GL(model2_sigma2_samp1_bayes,model2_sigma2_gamma,50)
+model2_sigma2_bayes_acc2=accuracy_GL(model2_sigma2_samp2_bayes,model2_sigma2_gamma,50)
+model2_sigma3_bayes_acc1=accuracy_GL(model2_sigma3_samp1_bayes,model2_sigma3_gamma,50)
+model2_sigma3_bayes_acc2=accuracy_GL(model2_sigma3_samp2_bayes,model2_sigma3_gamma,50)
+model3_sigma1_bayes_acc1=accuracy_GL(model3_sigma1_samp1_bayes,model3_sigma1_gamma,50)
+model3_sigma1_bayes_acc2=accuracy_GL(model3_sigma1_samp2_bayes,model3_sigma1_gamma,50)
+model3_sigma2_bayes_acc1=accuracy_GL(model3_sigma2_samp1_bayes,model3_sigma2_gamma,50)
+model3_sigma2_bayes_acc2=accuracy_GL(model3_sigma2_samp2_bayes,model3_sigma2_gamma,50)
+model3_sigma3_bayes_acc1=accuracy_GL(model3_sigma3_samp1_bayes,model3_sigma3_gamma,50)
+model3_sigma3_bayes_acc2=accuracy_GL(model3_sigma3_samp2_bayes,model3_sigma3_gamma,50)
+model4_sigma1_bayes_acc1=accuracy_GL(model4_sigma1_samp1_bayes,model4_sigma1_gamma,50)
+model4_sigma1_bayes_acc2=accuracy_GL(model4_sigma1_samp2_bayes,model4_sigma1_gamma,50)
+model4_sigma2_bayes_acc1=accuracy_GL(model4_sigma2_samp1_bayes,model4_sigma2_gamma,50)
+model4_sigma2_bayes_acc2=accuracy_GL(model4_sigma2_samp2_bayes,model4_sigma2_gamma,50)
+model4_sigma3_bayes_acc1=accuracy_GL(model4_sigma3_samp1_bayes,model4_sigma3_gamma,50)
+model4_sigma3_bayes_acc2=accuracy_GL(model4_sigma3_samp2_bayes,model4_sigma3_gamma,50)
+
+model1_sigma1_bayes_roc=accuracy_GL(model1_sigma1_roc_bayes,model1_sigma1_gamma,50)
+model1_sigma2_bayes_roc=accuracy_GL(model1_sigma2_roc_bayes,model1_sigma2_gamma,50)
+
+model2_sigma1_bayes_roc=accuracy_GL(model2_sigma1_roc_bayes,model2_sigma1_gamma,50)
+model2_sigma2_bayes_roc=accuracy_GL(model2_sigma2_roc_bayes,model2_sigma2_gamma,50)
+
+model3_sigma1_bayes_roc=accuracy_GL(model3_sigma1_roc_bayes,model3_sigma1_gamma,50)
+model3_sigma2_bayes_roc=accuracy_GL(model3_sigma2_roc_bayes,model3_sigma2_gamma,50)
+
+model4_sigma1_bayes_roc=accuracy_GL(model4_sigma1_roc_bayes,model4_sigma1_gamma,50)
+model4_sigma2_bayes_roc=accuracy_GL(model4_sigma2_roc_bayes,model4_sigma2_gamma,50)
+```
+
+
+```{r echo=FALSE}
+#ROC of Bayesian GL
+model1_sigma1_bayes_roc[[2]]=rev(model1_sigma1_bayes_roc[[2]])
+model1_sigma1_bayes_roc[[4]]=rev(model1_sigma1_bayes_roc[[4]])
+model1_sigma2_bayes_roc[[2]]=rev(model1_sigma2_bayes_roc[[2]])
+model1_sigma2_bayes_roc[[4]]=rev(model1_sigma2_bayes_roc[[4]])
+model2_sigma1_bayes_roc[[2]]=rev(model2_sigma1_bayes_roc[[2]])
+model2_sigma1_bayes_roc[[4]]=rev(model2_sigma1_bayes_roc[[4]])
+model2_sigma2_bayes_roc[[2]]=rev(model2_sigma2_bayes_roc[[2]])
+model2_sigma2_bayes_roc[[4]]=rev(model2_sigma2_bayes_roc[[4]])
+model3_sigma1_bayes_roc[[2]]=rev(model3_sigma1_bayes_roc[[2]])
+model3_sigma1_bayes_roc[[4]]=rev(model3_sigma1_bayes_roc[[4]])
+model3_sigma2_bayes_roc[[2]]=rev(model3_sigma2_bayes_roc[[2]])
+model3_sigma2_bayes_roc[[4]]=rev(model3_sigma2_bayes_roc[[4]])
+model4_sigma1_bayes_roc[[2]]=rev(model4_sigma1_bayes_roc[[2]])
+model4_sigma1_bayes_roc[[4]]=rev(model4_sigma1_bayes_roc[[4]])
+model4_sigma2_bayes_roc[[2]]=rev(model4_sigma2_bayes_roc[[2]])
+model4_sigma2_bayes_roc[[4]]=rev(model4_sigma2_bayes_roc[[4]])
+```
+
+
+```{r echo=FALSE}
+#Model1-AR(1) model
+
+SP1=c(mean(model1_samp1_acc[[1]]),mean(model1_sigma1_bayes_acc1[[1]]),mean(model1_samp2_acc[[1]]),mean(model1_sigma1_bayes_acc2[[1]]),mean(model1_samp3_acc[[1]]),mean(model1_sigma2_bayes_acc1[[1]]),mean(model1_samp4_acc[[1]]),mean(model1_sigma2_bayes_acc2[[1]]),mean(model1_samp5_acc[[1]]),mean(model1_sigma3_bayes_acc1[[1]]),mean(model1_samp6_acc[[1]]),mean(model1_sigma3_bayes_acc2[[1]]))
+
+SE1=c(mean(model1_samp1_acc[[2]]),mean(model1_sigma1_bayes_acc1[[2]]),mean(model1_samp2_acc[[2]]),mean(model1_sigma1_bayes_acc2[[2]]),mean(model1_samp3_acc[[2]]),mean(model1_sigma2_bayes_acc1[[2]]),mean(model1_samp4_acc[[2]]),mean(model1_sigma2_bayes_acc2[[2]]),mean(model1_samp5_acc[[2]]),mean(model1_sigma3_bayes_acc1[[2]]),mean(model1_samp6_acc[[2]]),mean(model1_sigma3_bayes_acc2[[2]]))
+
+MCC1=c(mean(model1_samp1_acc[[3]]),mean(model1_sigma1_bayes_acc1[[3]]),mean(model1_samp2_acc[[3]]),mean(model1_sigma1_bayes_acc2[[3]]),mean(model1_samp3_acc[[3]]),mean(model1_sigma2_bayes_acc1[[3]]),mean(model1_samp4_acc[[3]]),mean(model1_sigma2_bayes_acc2[[3]]),mean(model1_samp5_acc[[3]]),mean(model1_sigma3_bayes_acc1[[3]]),mean(model1_samp6_acc[[3]]),mean(model1_sigma3_bayes_acc2[[3]]))
+
+
+#Model2-AR(2) model
+
+SP2=c(mean(model2_samp1_acc[[1]]),mean(model2_sigma1_bayes_acc1[[1]]),mean(model2_samp2_acc[[1]]),mean(model2_sigma1_bayes_acc2[[1]]),mean(model2_samp3_acc[[1]]),mean(model2_sigma2_bayes_acc1[[1]]),mean(model2_samp4_acc[[1]]),mean(model2_sigma2_bayes_acc2[[1]]),mean(model2_samp5_acc[[1]]),mean(model2_sigma3_bayes_acc1[[1]]),mean(model2_samp6_acc[[1]]),mean(model2_sigma3_bayes_acc2[[1]]))
+
+SE2=c(mean(model2_samp1_acc[[2]]),mean(model2_sigma1_bayes_acc1[[2]]),mean(model2_samp2_acc[[2]]),mean(model2_sigma1_bayes_acc2[[2]]),mean(model2_samp3_acc[[2]]),mean(model2_sigma2_bayes_acc1[[2]]),mean(model2_samp4_acc[[2]]),mean(model2_sigma2_bayes_acc2[[2]]),mean(model2_samp5_acc[[2]]),mean(model2_sigma3_bayes_acc1[[2]]),mean(model2_samp6_acc[[2]]),mean(model2_sigma3_bayes_acc2[[2]]))
+
+MCC2=c(mean(model2_samp1_acc[[3]]),mean(model2_sigma1_bayes_acc1[[3]]),mean(model2_samp2_acc[[3]]),mean(model2_sigma1_bayes_acc2[[3]]),mean(model2_samp3_acc[[3]]),mean(model2_sigma2_bayes_acc1[[3]]),mean(model2_samp4_acc[[3]]),mean(model2_sigma2_bayes_acc2[[3]]),mean(model2_samp5_acc[[3]]),mean(model2_sigma3_bayes_acc1[[3]]),mean(model2_samp6_acc[[3]]),mean(model2_sigma3_bayes_acc2[[3]]))
+
+
+#Model3-Star model
+
+SP3=c(mean(model3_samp1_acc[[1]]),mean(model3_sigma1_bayes_acc1[[1]]),mean(model3_samp2_acc[[1]]),mean(model3_sigma1_bayes_acc2[[1]]),mean(model3_samp3_acc[[1]]),mean(model3_sigma2_bayes_acc1[[1]]),mean(model3_samp4_acc[[1]]),mean(model3_sigma2_bayes_acc2[[1]]),mean(model3_samp5_acc[[1]]),mean(model3_sigma3_bayes_acc1[[1]]),mean(model3_samp6_acc[[1]]),mean(model3_sigma3_bayes_acc2[[1]]))
+
+SE3=c(mean(model3_samp1_acc[[2]]),mean(model3_sigma1_bayes_acc1[[2]]),mean(model3_samp2_acc[[2]]),mean(model3_sigma1_bayes_acc2[[2]]),mean(model3_samp3_acc[[2]]),mean(model3_sigma2_bayes_acc1[[2]]),mean(model3_samp4_acc[[2]]),mean(model3_sigma2_bayes_acc2[[2]]),mean(model3_samp5_acc[[2]]),mean(model3_sigma3_bayes_acc1[[2]]),mean(model3_samp6_acc[[2]]),mean(model3_sigma3_bayes_acc2[[2]]))
+
+MCC3=c(mean(model3_samp1_acc[[3]]),mean(model3_sigma1_bayes_acc1[[3]]),mean(model3_samp2_acc[[3]]),mean(model3_sigma1_bayes_acc2[[3]]),mean(model3_samp3_acc[[3]]),mean(model3_sigma2_bayes_acc1[[3]]),mean(model3_samp4_acc[[3]]),mean(model3_sigma2_bayes_acc2[[3]]),mean(model3_samp5_acc[[3]]),mean(model3_sigma3_bayes_acc1[[3]]),mean(model3_samp6_acc[[3]]),mean(model3_sigma3_bayes_acc2[[3]]))
+
+
+#Model4-Circle model
+
+SP4=c(mean(model4_samp1_acc[[1]]),mean(model4_sigma1_bayes_acc1[[1]]),mean(model4_samp2_acc[[1]]),mean(model4_sigma1_bayes_acc2[[1]]),mean(model4_samp3_acc[[1]]),mean(model4_sigma2_bayes_acc1[[1]]),mean(model4_samp4_acc[[1]]),mean(model4_sigma2_bayes_acc2[[1]]),mean(model4_samp5_acc[[1]]),mean(model4_sigma3_bayes_acc1[[1]]),mean(model4_samp6_acc[[1]]),mean(model4_sigma3_bayes_acc2[[1]]))
+
+SE4=c(mean(model4_samp1_acc[[2]]),mean(model4_sigma1_bayes_acc1[[2]]),mean(model4_samp2_acc[[2]]),mean(model4_sigma1_bayes_acc2[[2]]),mean(model4_samp3_acc[[2]]),mean(model4_sigma2_bayes_acc1[[2]]),mean(model4_samp4_acc[[2]]),mean(model4_sigma2_bayes_acc2[[2]]),mean(model4_samp5_acc[[2]]),mean(model4_sigma3_bayes_acc1[[2]]),mean(model4_samp6_acc[[2]]),mean(model4_sigma3_bayes_acc2[[2]]))
+
+MCC4=c(mean(model4_samp1_acc[[3]]),mean(model4_sigma1_bayes_acc1[[3]]),mean(model4_samp2_acc[[3]]),mean(model4_sigma1_bayes_acc2[[3]]),mean(model4_samp3_acc[[3]]),mean(model4_sigma2_bayes_acc1[[3]]),mean(model4_samp4_acc[[3]]),mean(model4_sigma2_bayes_acc2[[3]]),mean(model4_samp5_acc[[3]]),mean(model4_sigma3_bayes_acc1[[3]]),mean(model4_samp6_acc[[3]]),mean(model4_sigma3_bayes_acc2[[3]]))
+```
+
+
+  Performance and ROC curves are given as following. 
+  
+  
+```{r}
+#Performance
+p=rep(c(30,50,100),each=4)
+n=rep(rep(c(100,200),each=2),3)
+method=rep(rep(c("Freq","Bayes"),2),3)
+
+#Model1-AR(1) model
+tibble(p=p,n=n,method=method,Specificity=SP1, Sensitivity=SE1, MCC=MCC1)
+
+#Model2-AR(2) model
+tibble(p=p,n=n,method=method,Specificity=SP2, Sensitivity=SE2, MCC=MCC2)
+
+#Model3-Star model
+tibble(p=p,n=n,method=method,Specificity=SP3, Sensitivity=SE3, MCC=MCC3)
+
+#Model4-Circle model
+tibble(p=p,n=n,method=method,Specificity=SP4, Sensitivity=SE4, MCC=MCC4)
+```
+
+
+```{r}
+#ROC curve
+
+plot1=ggplot()+geom_line(mapping=aes(x=model1_samp1_roc[[1]],y=model1_samp1_roc[[2]]),color="red")+geom_line(mapping=aes(x=model1_sigma1_bayes_roc[[4]],y=model1_sigma1_bayes_roc[[2]]),color="blue")+labs(title="AR(1): n=100, p=30")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.2),ylim=c(0,1))
+
+plot2=ggplot()+geom_line(mapping=aes(x=model1_samp3_roc[[1]],y=model1_samp3_roc[[2]]),color="red")+geom_line(mapping=aes(x=model1_sigma2_bayes_roc[[4]],y=model1_sigma2_bayes_roc[[2]]),color="blue")+labs(title="AR(1): n=100, p=50")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.2),ylim=c(0,1))
+
+plot3=ggplot()+geom_line(mapping=aes(x=model2_samp1_roc[[1]],y=model2_samp1_roc[[2]]),color="red")+geom_line(mapping=aes(x=model2_sigma1_bayes_roc[[4]],y=model2_sigma1_bayes_roc[[2]]),color="blue")+labs(title="AR(2): n=100, p=30")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.5),ylim=c(0,1))
+
+plot4=ggplot()+geom_line(mapping=aes(x=model2_samp3_roc[[1]],y=model2_samp3_roc[[2]]),color="red")+geom_line(mapping=aes(x=model2_sigma2_bayes_roc[[4]],y=model2_sigma2_bayes_roc[[2]]),color="blue")+labs(title="AR(2): n=100, p=50")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.5),ylim=c(0,1))
+
+plot5=ggplot()+geom_line(mapping=aes(x=model3_samp1_roc[[1]],y=model3_samp1_roc[[2]]),color="red")+geom_line(mapping=aes(x=model3_sigma1_bayes_roc[[4]],y=model3_sigma1_bayes_roc[[2]]),color="blue")+labs(title="Star: n=100, p=30")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.45),ylim=c(0,1))
+
+plot6=ggplot()+geom_line(mapping=aes(x=model3_samp3_roc[[1]],y=model3_samp3_roc[[2]]),color="red")+geom_line(mapping=aes(x=model3_sigma2_bayes_roc[[4]],y=model3_sigma2_bayes_roc[[2]]),color="blue")+labs(title="Star: n=100, p=50")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0,0.45),ylim=c(0,1))
+
+plot7=ggplot()+geom_line(mapping=aes(x=model4_samp1_roc[[1]],y=model4_samp1_roc[[2]]),color="red")+geom_line(mapping=aes(x=model4_sigma1_bayes_roc[[4]],y=model4_sigma1_bayes_roc[[2]]),color="blue")+labs(title="Circle: n=100, p=30")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0.15,0.4),ylim=c(0,1))
+
+plot8=ggplot()+geom_line(mapping=aes(x=model4_samp3_roc[[1]],y=model4_samp3_roc[[2]]),color="red")+geom_line(mapping=aes(x=model4_sigma2_bayes_roc[[4]],y=model4_sigma2_bayes_roc[[2]]),color="blue")+labs(title="Circle: n=100, p=50")+xlab("FPR")+ylab("Sensitivity")+theme(plot.title = element_text(hjust=0.5))+coord_cartesian(xlim=c(0.15,0.4),ylim=c(0,1))
+
+grid.arrange(plot1,plot2,plot3,plot4,ncol=2)
+grid.arrange(plot5,plot6,plot7,plot8,ncol=2)
+```
+
+
+ Note that red line refers to ROC curve of frequentist GL and blue line refers to ROC curve of Bayesian GL. Through the results of performance, Bayesian GL tends to perform better than frequentist GL, especially in low-dimension. The difference in performance tends to get smaller as the dimension grows. But one can clearly see that Bayesian GL is poor in sensitivity. This is because approximate posterior probabilities are computed for the graphs which are sub-graphs of the graphical structure identified by the graphical lasso(regularity condition). By choosing $q<\frac{1}{2}$, we allowed less edges to enter the model, which led to low sensitivity, but we became able to concentrate only on regular models.
+ 
+ 
+ One can further see that sensitivity was not good in AR(2) and Star models for both frequentist GL and Bayesian GL. Also, in ROC curves, as the penalty parameter $\lambda$ tends to get larger, sensitivity grows at the cost of higher false positive rate.
+
+
+ We also simulated with the real data. We used protein data from Rpackage sparsebn. This data consists of $n=7566$ observations of $p=11$ continuous variables corresponding to different proteins and phospholipids in human immune system cells and each observation indicates the measured level of each biomolecule in a single cell under different experimental interventions. We may compare graphs obtained from Bayesian GL, frequentist GL with true network. Here we set penalty parameter $\lambda=0.4$ and acceptance probability of edges $q=0.4$. For Bayesian GL, we obtain 10000 mcmc samples with 2000 burn-in. 
+
+
+```{r}
+#Protein_data
+protein_data=cytometryContinuous$data
+
+#Sample covariance matrix from protein data 
+protein_data_var=var(protein_data)*7465/7466
+sum(protein_data_var[,1])
+```
+
+
+```{r cache=TRUE, echo=TRUE, results='hide'}
+#true network edge
+
+edge=matrix(NA,nrow=22,ncol=2)
+edge[1,]=c(1,2)
+edge[2,]=c(1,8)
+edge[3,]=c(1,9)
+edge[4,]=c(2,6)
+edge[5,]=c(2,8)
+edge[6,]=c(2,9)
+edge[7,]=c(3,4)
+edge[8,]=c(3,5)
+edge[9,]=c(3,9)
+edge[10,]=c(4,5)
+edge[11,]=c(4,9)
+edge[12,]=c(5,6)
+edge[13,]=c(5,7)
+edge[14,]=c(5,8)
+edge[15,]=c(6,7)
+edge[16,]=c(6,8)
+edge[17,]=c(7,8)
+edge[18,]=c(8,9)
+edge[19,]=c(8,10)
+edge[20,]=c(8,11)
+edge[21,]=c(9,10)
+edge[22,]=c(9,11)
+
+edge_indicator=matrix(rep(0,11^2),ncol=11)
+for(i in 1:22){
+  edge_indicator[edge[i,1],edge[i,2]]=1
+}
+true_gamma=edge_indicator[upper.tri(edge_indicator)]
+
+#frequentist GL
+protein_gl_freq=glasso(protein_data_var,rho=0.4)$wi
+
+#frequentist GL model indicator
+freq_gamma=edge_count(protein_gl_freq)
+
+#Bayesian GL
+protein_gl_bayes=bayesian_GL_data(7466,11,protein_data_var,0.4,0.4,1,1,10000,2000)
+
+#Bayesian GL model indicator
+bayes_gamma=protein_gl_bayes[,,1]
+```
+
+
+ By comparing estimated model indicators and true network(model indicator), we calculate performances and draw networks. 
+ 
+ 
+```{r}
+#Performance
+
+method=c("Freq","Bayes")
+tp1=length(intersect(which(freq_gamma==1),which(true_gamma==1)))
+tn1=length(intersect(which(freq_gamma==0),which(true_gamma==0)))
+fp1=length(intersect(which(freq_gamma==1),which(true_gamma==0)))
+fn1=length(intersect(which(freq_gamma==0),which(true_gamma==1)))
+sp1=tn1/(tn1+fp1); se1=tp1/(tp1+fn1); mcc1=(tp1*tn1-fp1*fn1)/sqrt((tp1+fp1)*(tp1+fn1)*(tn1+fp1)*(tn1+fn1))
+
+tp2=length(intersect(which(bayes_gamma==1),which(true_gamma==1)))
+tn2=length(intersect(which(bayes_gamma==0),which(true_gamma==0)))
+fp2=length(intersect(which(bayes_gamma==1),which(true_gamma==0)))
+fn2=length(intersect(which(bayes_gamma==0),which(true_gamma==1)))
+sp2=tn2/(tn2+fp2); se2=tp2/(tp2+fn2); mcc2=(tp2*tn2-fp2*fn2)/sqrt((tp2+fp2)*(tp2+fn2)*(tn2+fp2)*(tn2+fn2))    
+
+#table of performance
+tibble(method=method,Specificity=c(sp1,sp2),Sensitivity=c(se1,se2),MCC=c(mcc1,mcc2))
+```
+
+
+ One can see that Bayesian GL shows better in specificity than frequentist GL. But, as we're concentrating only on regular models by setting $q<\frac{1}{2}$, we're allowing less edges in the model so that Bayesian GL suffers in sensitivity compared to frequentist GL. 
+
+
+```{r}
+#True network 
+protein_network=make_graph(c("Raf","Mek","Raf","PKA","Raf","PKC",                             "Mek","Erk","Mek","PKA","Mek","PKC",  
+                     "Plcg","PIP2","Plcg","PIP3","Plcg","PKC",
+                     "PIP2","PIP3","PIP2","PKC",
+                     "PIP3","Erk","PIP3","Akt","PIP3","PKA",
+                     "Erk","Akt","Erk","PKA",
+                     "Akt","PKA","PKA","PKC","PKA","P38",
+                     "PKA","Jnk","PKC","P38","PKC","Jnk"),directed=FALSE)
+
+#network by frequentist GL
+freq_network=make_graph(c("Raf","Mek","Mek","Plcg","Plcg","PIP2",
+                             "PIP2","PIP3","Mek","Akt","Plcg","Akt",
+                             "Erk","Akt","Raf","PKA","Mek","PKA",
+                             "Plcg","PKA","PIP2","PKA","Erk","PKC",
+                             "Mek","P38","Plcg","P38","Akt","P38",
+                             "PKA","P38","PKC","P38","Mek","Jnk",
+                             "Plcg","Jnk","Akt","Jnk","PKA","Jnk",
+                             "PKC","Jnk","P38","Jnk"),directed=FALSE)
+
+#network by Bayesian GL
+bayes_network=make_graph(c("Mek","Plcg","Raf","PIP2","Plcg","PIP2",
+                           "PIP2","PIP3","Mek","Akt","Plcg","Akt",
+                           "Erk","Akt","Raf","PKA","Plcg","PKA",
+                           "PIP2","PKA","Mek","P38","Akt","P38",
+                           "PKA","P38","PKC","P38","Mek","Jnk",
+                           "Plcg","Jnk","Akt","Jnk","PKA","Jnk",
+                           "PKC","Jnk","P38","Jnk"),directed=FALSE)
+
+
+layout1=layout_in_circle(protein_network,order=c("PKC","P38","Jnk","Raf","Mek","Plcg","PIP2","PIP3","Erk","Akt","PKA"))
+
+layout2=layout_in_circle(freq_network,order=c("PKC","P38","Jnk","Raf","Mek","Plcg","PIP2","PIP3","Erk","Akt","PKA"))
+
+layout3=layout_in_circle(bayes_network,order=c("PKC","P38","Jnk","Raf","Mek","Plcg","PIP2","PIP3","Erk","Akt","PKA"))
+
+par(mfrow=c(1,3))
+
+plot(protein_network,layout=layout1,edge.size=2,main="True Network")
+plot(freq_network,layout=layout2,edge.size=2,main="Frequentist Network")
+plot(bayes_network,layout=layout3,edge.size=2,main="Bayesian Network")
+```
+
+
+ From the grpahs above, the model estimated by Bayesian GL shows less edges, hence suffers in sensitivity. However, one cannot say frequentist GL performs good in that specificity is low and more edges are connected to Jnk, AKt in the model estimated by frequentist GL than true network. 
+ 
+ 
+ To sum up, Bayesian GL tends to perform better than frequentist GL especially in lower dimension. However, as the dimension grows, because of regularity condition, Bayesian GL shows especially poor in sensitivity. To mention one more drawbacks, Bayesian GL is very slower than frequentist GL. This may be due to two reasons. First, in each iteration, we check whether the model is regular. If the model is not regualr, we sample model indiciatr $\mathbf{\Gamma}$ until the model is regular. Also, in each iteration, we need to find precision matrix $\mathbf{\Omega_{\Gamma}}$ corresponding to $\mathbf{\Gamma}$. The more sparse is precision matrix, the more algorithm to find this precision matrix requires long time. Hence, Bayesian GL is not efficient compared to frequentist GL.
+ 
+ 
